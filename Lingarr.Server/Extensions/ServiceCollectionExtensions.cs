@@ -155,6 +155,8 @@ public static class ServiceCollectionExtensions
         builder.Services.AddScoped<IRadarrService, RadarrService>();
         builder.Services.AddScoped<ISonarrService, SonarrService>();
         builder.Services.AddScoped<ISubtitleService, SubtitleService>();
+        builder.Services.AddScoped<IFfmpegWrapper, FfmpegWrapper>();
+        builder.Services.AddScoped<IMkvSubtitleExtractor, MkvSubtitleExtractor>();
         builder.Services.AddScoped<ITranslationRequestService, TranslationRequestService>();
         builder.Services.AddScoped<ITranslationRequestEventService, TranslationRequestEventService>();
         builder.Services.AddScoped<IMediaSubtitleProcessor, MediaSubtitleProcessor>();

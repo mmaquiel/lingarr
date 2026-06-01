@@ -17,6 +17,7 @@
     <PackageReference Include="BCrypt.Net-Next" />
     <PackageReference Include="DeepL.net" />
     <PackageReference Include="EFCore.NamingConventions" />
+    <PackageReference Include="FFMpegCore" />
     <PackageReference Include="GTranslate" />
     <PackageReference Include="Hangfire" />
     <PackageReference Include="Hangfire.MemoryStorage" />

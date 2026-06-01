@@ -1,3 +1,4 @@
+.temp-data/
 *.swp
 *.*~
 project.lock.json

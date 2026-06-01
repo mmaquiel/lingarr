@@ -42,6 +42,7 @@ RUN dotnet publish "./Lingarr.Server.csproj" -c $BUILD_CONFIGURATION -o /app/pub
 # Step 5: Final image
 FROM base AS final
 WORKDIR /app
+RUN apt-get update && apt-get install -y ffmpeg --no-install-recommends && rm -rf /var/lib/apt/lists/*
 COPY --from=publish /app/publish .
 
 VOLUME /app/config

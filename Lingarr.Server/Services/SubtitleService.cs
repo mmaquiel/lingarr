@@ -19,13 +19,16 @@ public class SubtitleService : ISubtitleService
 
     private readonly ILogger<SubtitleService> _logger;
     private readonly LanguageCodeService _languageCodeService;
+    private readonly IMkvSubtitleExtractor _mkvSubtitleExtractor;
 
     public SubtitleService(
         ILogger<SubtitleService> logger,
-        LanguageCodeService languageCodeService)
+        LanguageCodeService languageCodeService,
+        IMkvSubtitleExtractor mkvSubtitleExtractor)
     {
         _logger = logger;
         _languageCodeService = languageCodeService;
+        _mkvSubtitleExtractor = mkvSubtitleExtractor;
     }
 
     /// <inheritdoc />
@@ -536,9 +539,25 @@ public class SubtitleService : ISubtitleService
     /// <inheritdoc />
     public async Task<List<Subtitles>> GetSubtitles(string path, string fileName)
     {
+        var mkvPath = Path.Combine(path, fileName + ".mkv");
+        var mkvSubtitles = new List<Subtitles>();
+
+        if (File.Exists(mkvPath))
+        {
+            mkvSubtitles = await _mkvSubtitleExtractor.ExtractSubtitles(mkvPath, fileName);
+        }
+
         var allSubtitles = await GetAllSubtitles(path);
-        return allSubtitles
+        var fsSubtitles = allSubtitles
             .Where(s => s.FileName.StartsWith(fileName + ".") || s.FileName == fileName)
+            .ToList();
+
+        var mkvLanguages = mkvSubtitles
+            .Select(s => s.Language)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        return mkvSubtitles
+            .Concat(fsSubtitles.Where(s => !mkvLanguages.Contains(s.Language)))
             .ToList();
     }
 

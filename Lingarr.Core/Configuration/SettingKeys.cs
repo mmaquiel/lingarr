@@ -89,6 +89,7 @@ public static class SettingKeys
         public const string MaxRetries = "max_retries";
         public const string RetryDelay = "retry_delay";
         public const string RetryDelayMultiplier = "retry_delay_multiplier";
+        public const string MaxConcurrentRequests = "max_concurrent_requests";
         public const string NavigateToDetailsOnRequest = "navigate_to_details_on_request";
         public const string LanguageCodeFormat = "language_code_format";
     }

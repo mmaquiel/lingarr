@@ -20,9 +20,9 @@ public class SubtitleTranslationService
     private readonly IProgressService? _progressService;
     private readonly ILogger _logger;
     private readonly Dictionary<int, (string Service, LanguagePair Pair)> _translationByPosition = [];
-    private readonly HashSet<string> _loggedSkips = [];
-    private readonly HashSet<TranslationCandidate> _loggedFallbacks = [];
-    private readonly Dictionary<(string Source, string Target), IReadOnlyList<TranslationCandidate>> _candidatesByPair = [];
+    private readonly ConcurrentDictionary<string, byte> _loggedSkips = new();
+    private readonly ConcurrentDictionary<TranslationCandidate, byte> _loggedFallbacks = new();
+    private readonly ConcurrentDictionary<(string Source, string Target), IReadOnlyList<TranslationCandidate>> _candidatesByPair = new();
     private readonly SemaphoreSlim _semaphore;
 
     private record TranslationResult(List<string> Lines, string? Service, LanguagePair? Pair);
@@ -280,7 +280,7 @@ public class SubtitleTranslationService
             var pair = await entry.Service.GetLanguagePair(sourceLanguage, targetLanguage, cancellationToken);
             if (pair is null)
             {
-                if (_loggedSkips.Add(entry.Name))
+                if (_loggedSkips.TryAdd(entry.Name, 0))
                 {
                     _logger.LogInformation(
                         "Skipping {Kind}translation service {Service}: no support for {Source}->{Target}.",
@@ -296,8 +296,7 @@ public class SubtitleTranslationService
             .ThenBy(candidate => candidate.ChainIndex)
             .ToList();
 
-        _candidatesByPair[(sourceLanguage, targetLanguage)] = sorted;
-        return sorted;
+        return _candidatesByPair.GetOrAdd((sourceLanguage, targetLanguage), sorted);
     }
 
     private void LogFallback(TranslationCandidate candidate, string requestedSource, string requestedTarget)
@@ -306,7 +305,7 @@ public class SubtitleTranslationService
         {
             return;
         }
-        if (!_loggedFallbacks.Add(candidate))
+        if (!_loggedFallbacks.TryAdd(candidate, 0))
         {
             return;
         }

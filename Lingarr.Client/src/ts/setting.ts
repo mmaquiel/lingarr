@@ -52,6 +52,7 @@ export const SETTINGS = {
     MAX_RETRIES: 'max_retries',
     RETRY_DELAY: 'retry_delay',
     RETRY_DELAY_MULTIPLIER: 'retry_delay_multiplier',
+    MAX_CONCURRENT_REQUESTS: 'max_concurrent_requests',
     AUTH_ENABLED: 'auth_enabled',
     ONBOARDING_COMPLETED: 'onboarding_completed',
     TELEMETRY_ENABLED: 'telemetry_enabled',
@@ -117,6 +118,7 @@ export interface ISettings {
     max_retries: string
     retry_delay: string
     retry_delay_multiplier: string
+    max_concurrent_requests: string
     auth_enabled: string
     onboarding_completed: string
     telemetry_enabled: string

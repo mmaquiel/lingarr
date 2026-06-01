@@ -400,6 +400,100 @@ public class SubtitleTranslationServiceTests
         Assert.Equal(["Run!", "Watch out!"], captured);
     }
 
+    [Fact]
+    public async Task TranslateSubtitles_ParallelConcurrency_TranslatesAllLines()
+    {
+        // Arrange — concurrency 2, 4 subtitles; verifies all lines still get translated
+        var translationServiceMock = new Mock<ITranslationService>();
+        translationServiceMock
+            .Setup(t => t.GetLanguagePair(
+                It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((string source, string target, CancellationToken _) =>
+                new LanguagePair { Source = source, Target = target, Tier = MatchTier.Exact });
+        translationServiceMock
+            .Setup(t => t.TranslateAsync(
+                It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(),
+                It.IsAny<List<string>?>(), It.IsAny<List<string>?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((string text, string _, string _, List<string>? _, List<string>? _, CancellationToken _) =>
+                text + "_translated");
+
+        var progressServiceMock = new Mock<IProgressService>();
+        progressServiceMock.Setup(p => p.Emit(It.IsAny<TranslationRequest>(), It.IsAny<int>())).Returns(Task.CompletedTask);
+        progressServiceMock.Setup(p => p.EmitLine(
+            It.IsAny<TranslationRequest>(), It.IsAny<int>(), It.IsAny<string>(),
+            It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<LanguagePair?>())).Returns(Task.CompletedTask);
+
+        var service = new SubtitleTranslationService(
+            [new TranslationServiceEntry("test", translationServiceMock.Object, null)],
+            NullLogger.Instance,
+            progressServiceMock.Object,
+            maxConcurrentRequests: 2);
+
+        var subtitles = new List<SubtitleItem>
+        {
+            Subtitle(1, "a"), Subtitle(2, "b"), Subtitle(3, "c"), Subtitle(4, "d")
+        };
+
+        // Act
+        await service.TranslateSubtitles(subtitles, NewRequest(),
+            stripSubtitleFormatting: false, preserveLineBreaks: false,
+            contextBefore: 0, contextAfter: 0, CancellationToken.None);
+
+        // Assert
+        Assert.Equal(["a_translated"], subtitles[0].TranslatedLines);
+        Assert.Equal(["b_translated"], subtitles[1].TranslatedLines);
+        Assert.Equal(["c_translated"], subtitles[2].TranslatedLines);
+        Assert.Equal(["d_translated"], subtitles[3].TranslatedLines);
+    }
+
+    [Fact]
+    public async Task TranslateSubtitles_ParallelConcurrency_ResultsInSubtitleOrder()
+    {
+        // Arrange — verifies drain emits in position order
+        var translationServiceMock = new Mock<ITranslationService>();
+        translationServiceMock
+            .Setup(t => t.GetLanguagePair(
+                It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((string source, string target, CancellationToken _) =>
+                new LanguagePair { Source = source, Target = target, Tier = MatchTier.Exact });
+        translationServiceMock
+            .Setup(t => t.TranslateAsync(
+                It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(),
+                It.IsAny<List<string>?>(), It.IsAny<List<string>?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((string text, string _, string _, List<string>? _, List<string>? _, CancellationToken _) =>
+                text + "_t");
+
+        var emitOrder = new List<int>();
+        var progressServiceMock = new Mock<IProgressService>();
+        progressServiceMock.Setup(p => p.Emit(It.IsAny<TranslationRequest>(), It.IsAny<int>())).Returns(Task.CompletedTask);
+        progressServiceMock
+            .Setup(p => p.EmitLine(
+                It.IsAny<TranslationRequest>(), It.IsAny<int>(), It.IsAny<string>(),
+                It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<LanguagePair?>()))
+            .Callback((TranslationRequest _, int pos, string _, string _, string? _, LanguagePair? _) =>
+                emitOrder.Add(pos))
+            .Returns(Task.CompletedTask);
+
+        var service = new SubtitleTranslationService(
+            [new TranslationServiceEntry("test", translationServiceMock.Object, null)],
+            NullLogger.Instance,
+            progressServiceMock.Object,
+            maxConcurrentRequests: 3);
+
+        var subtitles = new List<SubtitleItem>
+        {
+            Subtitle(1, "first"), Subtitle(2, "second"), Subtitle(3, "third")
+        };
+
+        // Act
+        await service.TranslateSubtitles(subtitles, NewRequest(),
+            stripSubtitleFormatting: false, preserveLineBreaks: false,
+            contextBefore: 0, contextAfter: 0, CancellationToken.None);
+
+        // Assert — EmitLine fired in subtitle position order
+        Assert.Equal([1, 2, 3], emitOrder);
+    }
+
     #endregion
 
     #region ProcessSubtitleBatch Tests

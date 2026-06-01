@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Lingarr.Core.Entities;
 using Lingarr.Core.Enum;
 using Lingarr.Server.Exceptions;
@@ -22,11 +23,15 @@ public class SubtitleTranslationService
     private readonly HashSet<string> _loggedSkips = [];
     private readonly HashSet<TranslationCandidate> _loggedFallbacks = [];
     private readonly Dictionary<(string Source, string Target), IReadOnlyList<TranslationCandidate>> _candidatesByPair = [];
+    private readonly SemaphoreSlim _semaphore;
+
+    private record TranslationResult(List<string> Lines, string? Service, LanguagePair? Pair);
 
     public SubtitleTranslationService(
         IReadOnlyList<TranslationServiceEntry> services,
         ILogger logger,
-        IProgressService? progressService = null)
+        IProgressService? progressService = null,
+        int maxConcurrentRequests = 1)
     {
         if (services.Count == 0)
         {
@@ -35,6 +40,7 @@ public class SubtitleTranslationService
         _services = services;
         _progressService = progressService;
         _logger = logger;
+        _semaphore = new SemaphoreSlim(maxConcurrentRequests, maxConcurrentRequests);
     }
 
     private readonly record struct TranslationCandidate(TranslationServiceEntry Entry, LanguagePair Pair, int ChainIndex);
@@ -63,28 +69,18 @@ public class SubtitleTranslationService
             throw new TranslationException("Subtitle translator could not be initialized, progress service is null.");
         }
 
-        var iteration = 0;
         var totalSubtitles = subtitles.Count;
+        var translationCache = new ConcurrentDictionary<string, string>();
 
-        // Many fansub .ass files stack multiple Dialogue lines at the same
-        // timestamp with identical plaintext (shadow, glow, border, main
-        // layers). Translate each unique (Start, End, plaintext) once per
-        // file and reuse the result for the rest. SRT/VTT files almost never
-        // share timestamps, so this is a no-op there.
-        var translationCache = new Dictionary<string, string>();
-
+        // Dispatch phase — fire all tasks concurrently, semaphore-gated
+        var tasks = new Task<TranslationResult>[totalSubtitles];
         for (var index = 0; index < totalSubtitles; index++)
         {
             var subtitle = subtitles[index];
 
-            if (cancellationToken.IsCancellationRequested)
-            {
-                _lastProgression = -1;
-                break;
-            }
-
             if (subtitle.TranslatedLines.Count > 0)
             {
+                // Populate cache from already-translated entries
                 var existingContentLines = stripSubtitleFormatting ? subtitle.PlaintextLines : subtitle.Lines;
                 if (!(preserveLineBreaks && existingContentLines.Count > 1))
                 {
@@ -95,15 +91,75 @@ public class SubtitleTranslationService
                         translationCache.TryAdd(cacheKey, string.Join(" ", subtitle.TranslatedLines));
                     }
                 }
-
-                iteration++;
-                await EmitProgress(translationRequest, iteration, totalSubtitles);
+                tasks[index] = Task.FromResult(new TranslationResult(subtitle.TranslatedLines, null, null));
                 continue;
             }
 
-            var contextLinesBefore = BuildContext(subtitles, index, contextBefore, stripSubtitleFormatting, true);
-            var contextLinesAfter = BuildContext(subtitles, index, contextAfter, stripSubtitleFormatting, false);
+            var capturedIndex = index;
+            var contextLinesBefore = BuildContext(subtitles, capturedIndex, contextBefore, stripSubtitleFormatting, true);
+            var contextLinesAfter = BuildContext(subtitles, capturedIndex, contextAfter, stripSubtitleFormatting, false);
 
+            tasks[index] = DispatchSubtitleTask(
+                subtitle,
+                translationRequest,
+                stripSubtitleFormatting,
+                preserveLineBreaks,
+                contextLinesBefore,
+                contextLinesAfter,
+                translationCache,
+                cancellationToken);
+        }
+
+        // Drain phase — await in order to preserve progress emission sequence
+        var iteration = 0;
+        for (var index = 0; index < totalSubtitles; index++)
+        {
+            var result = await tasks[index];
+            var subtitle = subtitles[index];
+
+            if (subtitle.TranslatedLines.Count == 0)
+            {
+                subtitle.TranslatedLines = result.Lines;
+            }
+
+            if (result.Service != null && result.Pair != null)
+            {
+                _translationByPosition[subtitle.Position] = (result.Service, result.Pair);
+            }
+
+            var contentLines = stripSubtitleFormatting ? subtitle.PlaintextLines : subtitle.Lines;
+            var sourceText = string.Join(" ", contentLines);
+            var translatedText = string.Join(" ", subtitle.TranslatedLines);
+
+            await _progressService!.EmitLine(
+                translationRequest,
+                subtitle.Position,
+                sourceText,
+                translatedText,
+                result.Service,
+                result.Pair);
+
+            iteration++;
+            await EmitProgress(translationRequest, iteration, totalSubtitles);
+        }
+
+        _lastProgression = -1;
+        return subtitles;
+    }
+
+    private async Task<TranslationResult> DispatchSubtitleTask(
+        SubtitleItem subtitle,
+        TranslationRequest translationRequest,
+        bool stripSubtitleFormatting,
+        bool preserveLineBreaks,
+        List<string> contextLinesBefore,
+        List<string> contextLinesAfter,
+        ConcurrentDictionary<string, string> translationCache,
+        CancellationToken cancellationToken)
+    {
+        await _semaphore.WaitAsync(cancellationToken);
+        try
+        {
             var contentLines = stripSubtitleFormatting ? subtitle.PlaintextLines : subtitle.Lines;
             var subtitleLines = preserveLineBreaks && contentLines.Count > 1
                 ? contentLines
@@ -112,6 +168,7 @@ public class SubtitleTranslationService
             var translatedLines = new List<string>(subtitleLines.Count);
             string? service = null;
             LanguagePair? pair = null;
+
             foreach (var subtitleLine in subtitleLines)
             {
                 if (string.IsNullOrWhiteSpace(subtitleLine))
@@ -135,37 +192,23 @@ public class SubtitleTranslationService
                     ContextLinesBefore = contextLinesBefore.Count > 0 ? contextLinesBefore : null,
                     ContextLinesAfter = contextLinesAfter.Count > 0 ? contextLinesAfter : null
                 }, cancellationToken);
+
                 translationCache[cacheKey] = result.Translation;
                 translatedLines.Add(result.Translation);
                 service ??= result.Service;
                 pair ??= result.Pair;
             }
 
-            subtitle.TranslatedLines = translatedLines.Count > 1
+            var finalLines = translatedLines.Count > 1
                 ? translatedLines
                 : ToSubtitleLines(translatedLines[0], contentLines.Count, preserveLineBreaks, stripSubtitleFormatting, subtitle.Position);
 
-            var sourceText = string.Join(" ", contentLines);
-            var translatedText = string.Join(" ", subtitle.TranslatedLines);
-            if (service != null && pair != null)
-            {
-                _translationByPosition[subtitle.Position] = (service, pair);
-            }
-
-            await _progressService!.EmitLine(
-                translationRequest,
-                subtitle.Position,
-                sourceText,
-                translatedText,
-                service,
-                pair);
-
-            iteration++;
-            await EmitProgress(translationRequest, iteration, totalSubtitles);
+            return new TranslationResult(finalLines, service, pair);
         }
-
-        _lastProgression = -1;
-        return subtitles;
+        finally
+        {
+            _semaphore.Release();
+        }
     }
 
     /// <summary>

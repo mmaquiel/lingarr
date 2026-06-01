@@ -96,7 +96,8 @@ public class TranslationJob
                 SettingKeys.Translation.MaxBatchSize,
                 SettingKeys.Translation.RemoveLanguageTag,
                 SettingKeys.Translation.UseSubtitleTagging,
-                SettingKeys.Translation.SubtitleTag
+                SettingKeys.Translation.SubtitleTag,
+                SettingKeys.Translation.MaxConcurrentRequests
             ]);
             var serviceNames = TranslationServices.Parse(settings[SettingKeys.Translation.ServiceType]);
             var serviceType = serviceNames[0];
@@ -120,6 +121,10 @@ public class TranslationJob
                     ? linesAfter
                     : 0;
             }
+
+            var maxConcurrentRequests = int.TryParse(settings[SettingKeys.Translation.MaxConcurrentRequests], out var concurrency)
+                ? Math.Max(1, concurrency)
+                : 1;
 
             // validate subtitles
             if (validateSubtitles)
@@ -174,7 +179,7 @@ public class TranslationJob
                 throw new TranslationException($"No usable translation services configured: [{string.Join(", ", serviceNames)}]");
             }
             var translationService = services[0].Service;
-            var translator = new SubtitleTranslationService(services, _logger, _progressService);
+            var translator = new SubtitleTranslationService(services, _logger, _progressService, maxConcurrentRequests);
             var subtitles = await _subtitleService.ReadSubtitles(request.SubtitleToTranslate);
 
             // subtitle already carries a translation from an earlier prior run.

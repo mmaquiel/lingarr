@@ -4,11 +4,11 @@
 
 networks:
   lingarr:
-    external: true
+    driver: bridge
 
 services:
   Lingarr.Server:
-    extra_hosts: # added for ollama 
+    extra_hosts:
       - "host.docker.internal:host-gateway"
     container_name: Lingarr.Server
     image: ${DOCKER_REGISTRY-}lingarrserver
@@ -19,188 +19,50 @@ services:
         BUILD_CONFIGURATION: ${BUILD_CONFIGURATION:-Debug}
     environment:
       - ASPNETCORE_ENVIRONMENT=Development
-      - BASE_PATH=/lingarr
-    
-      - DB_CONNECTION=mysql
-      - DB_HOST=Lingarr.Mysql
-      - DB_PORT=3306
-      - DB_DATABASE=Lingarr
-      - DB_USERNAME=Lingarr
-      - DB_PASSWORD=Secret1234
-
-#      - DB_CONNECTION=postgresql
-#      - DB_HOST=Lingarr.Postgres
-#      - DB_PORT=5432
-#      - DB_DATABASE=Lingarr
-#      - DB_USERNAME=Lingarr
-#      - DB_PASSWORD=Secret1234
-      
+      - DB_CONNECTION=sqlite
       - SERVICE_TYPE=libretranslate
-      - LIBRE_TRANSLATE_URL=http://libretranslate:5000
       - SOURCE_LANGUAGES=[{"name":"English","code":"en"},{"name":"Dutch","code":"nl"}]
       - TARGET_LANGUAGES=[{"name":"Turkish","code":"tr"},{"name":"Dutch","code":"nl"}]
       - ASPNETCORE_URLS=http://+:9876
       - ASPNETCORE_HTTP_PORTS=9876
     volumes:
-      - ../media/data/movies:/movies
-      - ../media/data/tv:/tv
-      - ../media/data/series/anime:/anime
-      - ../media/data/config:/app/config
+      - ./.temp-data/movies:/movies
+      - ./.temp-data/series:/series
+      - ./.temp-data/config/lingarr:/app/config
     ports:
       - "9877:9876"
     networks:
       - lingarr
-    depends_on:
-      Lingarr.Mysql:
-        condition: service_healthy
-    labels:
-      - "traefik.enable=true"
-      - "traefik.docker.network=lingarr"
-      - "traefik.http.services.lingarr.loadbalancer.server.port=9876"
-      
-      # Prefix /lingarr: http://lingarr.localhost/lingarr
-      - "traefik.http.routers.lingarr-pfx.rule=Host(`lingarr.localhost`) && PathPrefix(`/lingarr`)"
-      - "traefik.http.routers.lingarr-pfx.entrypoints=web"
-      - "traefik.http.routers.lingarr-pfx.service=lingarr"
-      - "traefik.http.routers.lingarr-pfx.middlewares=lingarr-prefix"
-      - "traefik.http.middlewares.lingarr-prefix.headers.customrequestheaders.X-Forwarded-Prefix=/lingarr"
 
-  Lingarr.Traefik:
-    image: traefik:v3
-    container_name: Lingarr.Traefik
-    command:
-      - "--providers.docker=true"
-      - "--providers.docker.exposedbydefault=false"
-      - "--entrypoints.web.address=:80"
-      - "--api.dashboard=true"
-      - "--api.insecure=true"
-    ports:
-      - "80:80"
-      - "8080:8080"
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-    networks:
-      - lingarr
-
-  Lingarr.Client:
-    image: ${DOCKER_REGISTRY-}lingarrclient
-    container_name: Lingarr.Client
-    build:
-      context: ./Lingarr.Client/
-      dockerfile: Dockerfile
-    ports:
-      - "9876:9876"
-    volumes:
-      - ./Lingarr.Client:/app:rw
-      - ./Lingarr.Client/node_modules:/app/node_modules
-    tty: true
-    command: /bin/sh -c "npm install && npm run dev"
-    networks:
-      - lingarr
-
-  LibreTranslate:
-    container_name: LibreTranslate
-    image: libretranslate/libretranslate:latest
-    restart: unless-stopped
-    environment:
-      - LT_LOAD_ONLY=en,tr,nl,pt
-      - LT_DISABLE_WEB_UI=false # Optional, enable if you would like to make use of the LibreTranslate web interface 
-    ports:
-      - 5000:5000
-    volumes:
-      - ../media/libretranslate:/home/libretranslate/.local/share/argos-translate
-    networks:
-      - lingarr
-    healthcheck:
-      test: ["CMD-SHELL", "./venv/bin/python scripts/healthcheck.py"]
-
-  Lingarr.Mysql:
-    image: mariadb:latest
-    container_name: Lingarr.Mysql
-    tty: true
-    ports:
-      - "1433:3306"
-    environment:
-      MYSQL_DATABASE: Lingarr
-      MYSQL_USER: Lingarr
-      MYSQL_PASSWORD: Secret1234
-      MYSQL_ROOT_PASSWORD: Secret1234
-      SERVICE_TAGS: dev
-      SERVICE_NAME: mariadb
-    networks:
-      - lingarr
-    healthcheck:
-      test: "mariadb $$MYSQL_DATABASE -u$$MYSQL_USER -p$$MYSQL_PASSWORD -e 'SELECT 1;'"
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  Lingarr.Postgres:
-    image: postgres:16-alpine
-    container_name: Lingarr.Postgres
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: Lingarr
-      POSTGRES_USER: Lingarr
-      POSTGRES_PASSWORD: Secret1234
-    ports:
-      - "5432:5432"
-    networks:
-      - lingarr
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U Lingarr -d Lingarr"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      
-  Lingarr.PHPMyAdmin:
-    image: phpmyadmin/phpmyadmin:5.0.1
-    container_name: Lingarr.PHPMyAdmin
-    environment:
-      PMA_HOST: Lingarr.Mysql
-      PMA_USER: Lingarr
-      PMA_PASSWORD: Secret1234
-      UPLOAD_LIMIT: 500M
-    ports:
-      - "9878:80"
-    networks:
-      - lingarr
-  
   radarr:
-    image: ghcr.io/hotio/radarr:nightly
+    image: lscr.io/linuxserver/radarr:latest
     container_name: radarr
     environment:
+      - PUID=1000
+      - PGID=1000
       - TZ=Europe/Amsterdam
     volumes:
-      - ../media/data/movies:/movies
+      - ./.temp-data/movies:/movies
+      - ./.temp-data/config/radarr:/config
     restart: unless-stopped
     ports:
-      - 7878:7878
+      - "7878:7878"
     networks:
       - lingarr
 
   sonarr:
-    image: ghcr.io/hotio/sonarr:nightly
+    image: lscr.io/linuxserver/sonarr:latest
     container_name: sonarr
     environment:
+      - PUID=1000
+      - PGID=1000
       - TZ=Europe/Amsterdam
     volumes:
-      - ../media/data/tv:/tv
-      - ../media/data/series/anime:/anime
+      - ./.temp-data/series:/series
+      - ./.temp-data/config/sonarr:/config
     restart: unless-stopped
     ports:
-      - 8989:8989
+      - "8989:8989"
     networks:
       - lingarr
 
-#  localai:
-#    container_name: localai
-#    image: localai/localai:latest-aio-cpu
-#    ports:
-#      - 8080:8080
-#    environment:
-#      - 'PRELOAD_MODELS=[{"url": "github:go-skynet/model-gallery/mistral.yaml", "name": "mistral"}]'
-#    stdin_open: true
-#    tty: true
-#    networks:
-#      - lingarr

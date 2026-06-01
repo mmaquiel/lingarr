@@ -179,7 +179,7 @@ public class TranslationJob
                 throw new TranslationException($"No usable translation services configured: [{string.Join(", ", serviceNames)}]");
             }
             var translationService = services[0].Service;
-            var translator = new SubtitleTranslationService(services, _logger, _progressService, maxConcurrentRequests);
+            using var translator = new SubtitleTranslationService(services, _logger, _progressService, maxConcurrentRequests);
             var subtitles = await _subtitleService.ReadSubtitles(request.SubtitleToTranslate);
 
             // subtitle already carries a translation from an earlier prior run.

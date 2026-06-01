@@ -211,6 +211,31 @@ public class SubtitleTranslationService : IDisposable
         }
     }
 
+    private async Task<List<SubtitleItem>> DispatchBatchChunkTask(
+        List<SubtitleItem> currentBatch,
+        string sourceLanguage,
+        string targetLanguage,
+        bool stripSubtitleFormatting,
+        bool preserveLineBreaks,
+        CancellationToken cancellationToken)
+    {
+        await _semaphore.WaitAsync(cancellationToken);
+        try
+        {
+            return await ProcessSubtitleBatch(
+                currentBatch,
+                sourceLanguage,
+                targetLanguage,
+                stripSubtitleFormatting,
+                preserveLineBreaks,
+                cancellationToken);
+        }
+        finally
+        {
+            _semaphore.Release();
+        }
+    }
+
     /// <summary>
     /// Translates a single subtitle line, walking configured services in best-match order and falling back on per-service failure.
     /// </summary>
@@ -342,8 +367,27 @@ public class SubtitleTranslationService : IDisposable
         }
 
         var totalBatches = (int)Math.Ceiling((double)subtitles.Count / batchSize);
-        var processedSubtitles = 0;
 
+        // Dispatch phase — fire all chunk tasks concurrently, semaphore-gated
+        var chunkTasks = new Task<List<SubtitleItem>>[totalBatches];
+        for (var batchIndex = 0; batchIndex < totalBatches; batchIndex++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var currentBatch = subtitles
+                .Skip(batchIndex * batchSize)
+                .Take(batchSize)
+                .ToList();
+            chunkTasks[batchIndex] = DispatchBatchChunkTask(
+                currentBatch,
+                translationRequest.SourceLanguage,
+                translationRequest.TargetLanguage,
+                stripSubtitleFormatting,
+                preserveLineBreaks,
+                cancellationToken);
+        }
+
+        // Drain phase — await chunks in order, emit progress sequentially
+        var processedSubtitles = 0;
         for (var batchIndex = 0; batchIndex < totalBatches; batchIndex++)
         {
             if (cancellationToken.IsCancellationRequested)
@@ -352,18 +396,7 @@ public class SubtitleTranslationService : IDisposable
                 break;
             }
 
-            var currentBatch = subtitles
-                .Skip(batchIndex * batchSize)
-                .Take(batchSize)
-                .ToList();
-
-            var newlyTranslated = await ProcessSubtitleBatch(
-                currentBatch,
-                translationRequest.SourceLanguage,
-                translationRequest.TargetLanguage,
-                stripSubtitleFormatting,
-                preserveLineBreaks,
-                cancellationToken);
+            var newlyTranslated = await chunkTasks[batchIndex];
 
             if (newlyTranslated.Count > 0)
             {
@@ -382,7 +415,7 @@ public class SubtitleTranslationService : IDisposable
                 await _progressService!.EmitLines(translationRequest, lineData);
             }
 
-            processedSubtitles += currentBatch.Count;
+            processedSubtitles += Math.Min(batchSize, subtitles.Count - batchIndex * batchSize);
             await EmitProgress(translationRequest, processedSubtitles, subtitles.Count);
         }
 

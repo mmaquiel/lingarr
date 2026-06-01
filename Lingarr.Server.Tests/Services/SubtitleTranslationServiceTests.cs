@@ -606,6 +606,60 @@ public class SubtitleTranslationServiceTests
 
     #endregion
 
+    #region TranslateSubtitlesBatch Tests
+
+    [Fact]
+    public async Task TranslateSubtitlesBatch_ParallelConcurrency_TranslatesAllChunks()
+    {
+        // Arrange — batchSize=2, 4 subtitles → 2 chunks; concurrency=2 fires both chunks concurrently
+        var translationServiceMock = new Mock<ITranslationService>();
+        translationServiceMock
+            .Setup(t => t.GetLanguagePair(
+                It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((string source, string target, CancellationToken _) =>
+                new LanguagePair { Source = source, Target = target, Tier = MatchTier.Exact });
+
+        var batchMock = new Mock<IBatchTranslationService>();
+        batchMock
+            .Setup(b => b.TranslateBatchAsync(
+                It.IsAny<List<BatchSubtitleItem>>(),
+                It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((List<BatchSubtitleItem> items, string _, string _, CancellationToken _) =>
+                items.ToDictionary(i => i.Position, i => i.Line + "_t"));
+
+        var progressServiceMock = new Mock<IProgressService>();
+        progressServiceMock.Setup(p => p.Emit(It.IsAny<TranslationRequest>(), It.IsAny<int>())).Returns(Task.CompletedTask);
+        progressServiceMock.Setup(p => p.EmitLines(It.IsAny<TranslationRequest>(), It.IsAny<List<TranslatedLineData>>())).Returns(Task.CompletedTask);
+
+        var service = new SubtitleTranslationService(
+            [new TranslationServiceEntry("test", translationServiceMock.Object, batchMock.Object)],
+            NullLogger.Instance,
+            progressServiceMock.Object,
+            maxConcurrentRequests: 2);
+
+        var subtitles = new List<SubtitleItem>
+        {
+            Subtitle(1, "a"), Subtitle(2, "b"), Subtitle(3, "c"), Subtitle(4, "d")
+        };
+
+        // Act
+        await service.TranslateSubtitlesBatch(subtitles, NewRequest(),
+            stripSubtitleFormatting: false, preserveLineBreaks: false,
+            batchSize: 2, CancellationToken.None);
+
+        // Assert
+        Assert.Equal(["a_t"], subtitles[0].TranslatedLines);
+        Assert.Equal(["b_t"], subtitles[1].TranslatedLines);
+        Assert.Equal(["c_t"], subtitles[2].TranslatedLines);
+        Assert.Equal(["d_t"], subtitles[3].TranslatedLines);
+        batchMock.Verify(b => b.TranslateBatchAsync(
+            It.IsAny<List<BatchSubtitleItem>>(),
+            It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
+            Times.Exactly(2));
+    }
+
+    #endregion
+
     #region Chain-wide best-match resolution
 
     private static Mock<ITranslationService> MockService(LanguagePair? pair, Func<string, string> translate)

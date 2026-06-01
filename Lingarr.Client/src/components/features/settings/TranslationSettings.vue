@@ -169,8 +169,10 @@ const retryDelayMultiplier = computed({
 const maxConcurrentRequests = computed({
     get: (): string => settingsStore.getSetting(SETTINGS.MAX_CONCURRENT_REQUESTS) as string,
     set: (newValue: string): void => {
-        settingsStore.updateSetting(SETTINGS.MAX_CONCURRENT_REQUESTS, newValue, isValid.maxConcurrentRequests)
-        saveNotification.value?.show()
+        const num = parseInt(newValue, 10)
+        const valid = isValid.maxConcurrentRequests && !isNaN(num) && num >= 1
+        settingsStore.updateSetting(SETTINGS.MAX_CONCURRENT_REQUESTS, newValue, valid)
+        if (valid) saveNotification.value?.show()
     }
 })
 </script>

@@ -12,14 +12,14 @@ using Lingarr.Server.Services.Subtitle;
 
 namespace Lingarr.Server.Services;
 
-public class SubtitleTranslationService
+public class SubtitleTranslationService : IDisposable
 {
     private const int MaxLineLength = 42;
     private int _lastProgression = -1;
     private readonly IReadOnlyList<TranslationServiceEntry> _services;
     private readonly IProgressService? _progressService;
     private readonly ILogger _logger;
-    private readonly Dictionary<int, (string Service, LanguagePair Pair)> _translationByPosition = [];
+    private readonly ConcurrentDictionary<int, (string Service, LanguagePair Pair)> _translationByPosition = new();
     private readonly ConcurrentDictionary<string, byte> _loggedSkips = new();
     private readonly ConcurrentDictionary<TranslationCandidate, byte> _loggedFallbacks = new();
     private readonly ConcurrentDictionary<(string Source, string Target), IReadOnlyList<TranslationCandidate>> _candidatesByPair = new();
@@ -76,6 +76,7 @@ public class SubtitleTranslationService
         var tasks = new Task<TranslationResult>[totalSubtitles];
         for (var index = 0; index < totalSubtitles; index++)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var subtitle = subtitles[index];
 
             if (subtitle.TranslatedLines.Count > 0)
@@ -95,9 +96,8 @@ public class SubtitleTranslationService
                 continue;
             }
 
-            var capturedIndex = index;
-            var contextLinesBefore = BuildContext(subtitles, capturedIndex, contextBefore, stripSubtitleFormatting, true);
-            var contextLinesAfter = BuildContext(subtitles, capturedIndex, contextAfter, stripSubtitleFormatting, false);
+            var contextLinesBefore = BuildContext(subtitles, index, contextBefore, stripSubtitleFormatting, true);
+            var contextLinesAfter = BuildContext(subtitles, index, contextAfter, stripSubtitleFormatting, false);
 
             tasks[index] = DispatchSubtitleTask(
                 subtitle,
@@ -580,5 +580,10 @@ public class SubtitleTranslationService
             await _progressService!.Emit(request, progress);
             _lastProgression = progress;
         }
+    }
+
+    public void Dispose()
+    {
+        _semaphore.Dispose();
     }
 }

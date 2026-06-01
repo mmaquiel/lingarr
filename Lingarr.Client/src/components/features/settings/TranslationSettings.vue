@@ -78,6 +78,17 @@
                 v-model="retryDelayMultiplier"
                 :validation-type="INPUT_VALIDATION_TYPE.NUMBER"
                 @update:validation="(val) => (isValid.retryDelayMultiplier = val)" />
+
+            <div class="flex flex-col space-x-2">
+                <span class="font-semibold">Max concurrent requests:</span>
+                Number of translation requests sent in parallel. Increase for faster
+                translation on services that support concurrent load (e.g. local Ollama).
+                Default is 1 (sequential).
+            </div>
+            <InputComponent
+                v-model="maxConcurrentRequests"
+                :validation-type="INPUT_VALIDATION_TYPE.NUMBER"
+                @update:validation="(val) => (isValid.maxConcurrentRequests = val)" />
         </template>
     </CardComponent>
 </template>
@@ -98,7 +109,8 @@ const isValid = reactive({
     requestTimeout: true,
     maxRetries: true,
     retryDelay: true,
-    retryDelayMultiplier: true
+    retryDelayMultiplier: true,
+    maxConcurrentRequests: true
 })
 const serviceType = computed(() => settingsStore.getSetting(SETTINGS.SERVICE_TYPE))
 
@@ -150,6 +162,14 @@ const retryDelayMultiplier = computed({
             newValue,
             isValid.retryDelayMultiplier
         )
+        saveNotification.value?.show()
+    }
+})
+
+const maxConcurrentRequests = computed({
+    get: (): string => settingsStore.getSetting(SETTINGS.MAX_CONCURRENT_REQUESTS) as string,
+    set: (newValue: string): void => {
+        settingsStore.updateSetting(SETTINGS.MAX_CONCURRENT_REQUESTS, newValue, isValid.maxConcurrentRequests)
         saveNotification.value?.show()
     }
 })

@@ -115,7 +115,16 @@ GetSubtitles(path, fileName)
 
 ### Cache Path Construction
 
-The relative media directory is derived by stripping the configured media root prefix from `path`, then appended to the cache root. This mirrors the media structure under the cache root.
+The relative media directory is derived by stripping the leading `/` from the absolute `path` argument, then appending to the cache root:
+
+```
+path  = /media/movies/Movie (2023)/
+cache = {cacheRoot}/media/movies/Movie (2023)/Movie.eng.srt
+```
+
+Concretely: `Path.Combine(cacheRoot, path.TrimStart(Path.DirectorySeparatorChar), $"{mediaFileName}.{lang}{ext}")`
+
+This requires no additional configuration and is fully deterministic.
 
 ## Error Handling
 
